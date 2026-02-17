@@ -81,3 +81,5 @@ evaluate
 nltk
 absl-py
 rouge_score
+transformers
+evaluate

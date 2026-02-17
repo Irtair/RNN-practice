@@ -5,16 +5,20 @@ from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 from tokenizers import Tokenizer
+import yaml
 
-
-# Регулярные выражения
-re_user = re.compile(r'@\w+\s*')
-re_links = re.compile(r'https?://\S+|www\.\S+')
-re_all_but_base = re.compile(r'[^a-zA-Z0-9\s]')
-re_double_spaces = re.compile(r'\s{2,}')
+path = "./configs/config.yaml"
+with open(path, "r") as f:
+    config = yaml.safe_load(f)
 
 
 def clear_text_line(line):
+    # Регулярные выражения
+    re_user = re.compile(r'@\w+\s*')
+    re_links = re.compile(r'https?://\S+|www\.\S+')
+    re_all_but_base = re.compile(r'[^a-zA-Z0-9\s]')
+    re_double_spaces = re.compile(r'\s{2,}')
+
     line = line.casefold()
     line = re_user.sub('', line)
     line = re_links.sub('', line)
@@ -38,65 +42,63 @@ class TweeterDataset(Dataset):
         }
 
 
-data_dir = "data"
-processed_path = os.path.join(data_dir, "dataset_processed.txt")
-raw_path = os.path.join(data_dir, "tweets.txt")
+def process_data(data_dir, raw_path, processed_path):
+    print("Загрузка/обработка данных...")
 
-print("Загрузка/обработка данных...")
+    if os.path.exists(processed_path):
+        with open(processed_path, 'r', encoding='utf-8') as f:
+            cleaned = [line.strip() for line in f if line.strip()]
+        print("--Данные загружены из кэша")
+    else:
+        os.makedirs(data_dir, exist_ok=True)
 
-if os.path.exists(processed_path):
-    with open(processed_path, 'r', encoding='utf-8') as f:
-        cleaned = [line.strip() for line in f if line.strip()]
-else:
-    os.makedirs(data_dir, exist_ok=True)
+        with open(raw_path, 'r', encoding='utf-8') as f:
+            raw_lines = [line for line in f]
 
-    with open(raw_path, 'r', encoding='utf-8') as f:
-        raw_lines = [line for line in f]
+        cleaned = list(tqdm(
+            map(clear_text_line, raw_lines),
+            total=len(raw_lines),
+            desc="Очистка текста"
+        ))
 
-    cleaned = list(tqdm(
-        map(clear_text_line, raw_lines),
-        total=len(raw_lines),
-        desc="Очистка текста"
-    ))
+        with open(processed_path, 'w', encoding='utf-8') as f:
+            for line in cleaned:
+                if line:
+                    f.write(line + "\n")
+        
+    return cleaned
 
-    with open(processed_path, 'w', encoding='utf-8') as f:
-        for line in cleaned:
-            if line:
-                f.write(line + "\n")
+def data_tokenization(data_dir, tokenized_file_name, cleaned):
 
+    tokenized_path = os.path.join(data_dir, tokenized_file_name)
 
-print("Начало токенизации...")
-tokenized_path = os.path.join(data_dir, "tokenized.pt")
+    if os.path.exists(tokenized_path):
+        tokenized = torch.load(tokenized_path)
+        print(f"Загружено {len(tokenized)} последовательностей")
+    else:
+        tokenizer = Tokenizer.from_file("wordlevel.json")
+        bos_id = tokenizer.token_to_id("<bos>")
+        eos_id = tokenizer.token_to_id("<eos>")
 
-if os.path.exists(tokenized_path):
-    print("📦 Загрузка токенизированных данных из кэша...")
-    tokenized = torch.load(tokenized_path)
-    print(f"✅ Загружено {len(tokenized)} последовательностей")
-else:
-    from tokenizer import train_tokenizer
-    train_tokenizer()
+        encodings = tokenizer.encode_batch(cleaned)
 
-    tokenizer = Tokenizer.from_file("wordlevel.json")
+        tokenized = []
+        for enc in tqdm(encodings, desc="Токенизация"):
+            ids = enc.ids[:62]
+            ids = [bos_id] + ids + [eos_id]
 
-    pad_id = tokenizer.token_to_id("<pad>")
-    bos_id = tokenizer.token_to_id("<bos>")
-    eos_id = tokenizer.token_to_id("<eos>")
+            if len(ids) >= 3:
+                tokenized.append(ids)
 
-    encodings = tokenizer.encode_batch(cleaned)
-
-    tokenized = []
-    for enc in tqdm(encodings, desc="Токенизация"):
-        ids = enc.ids[:62]
-        ids = [bos_id] + ids + [eos_id]
-
-        if len(ids) >= 3:
-            tokenized.append(ids)
-
-    torch.save(tokenized, tokenized_path)
-    print(f"✅ Токенизация завершена и сохранена. Всего: {len(tokenized)}")
-
+        torch.save(tokenized, tokenized_path)
+        print(f"✅ Токенизация завершена и сохранена. Всего: {len(tokenized)}")
+    
+    return tokenized
 
 def collate_fn(batch):
+    tokenizer = Tokenizer.from_file(config["data"]["tokenizer_file_name"])
+    pad_id = tokenizer.token_to_id("<pad>")
+
     lines = [item['line'] for item in batch]
     labels = [item['label'] for item in batch]
     lengths = torch.tensor([len(line) for line in lines], dtype=torch.long)
@@ -119,35 +121,12 @@ def collate_fn(batch):
         'lengths': lengths,
     }
 
+def data_split(tokenized):
+    tokenized_ds_len = len(tokenized)
 
-# Разбиение 80/10/10
-tokenized_ds_len = len(tokenized)
+    train_seqs = tokenized[:int(0.8 * tokenized_ds_len)]
+    val_seqs = tokenized[int(0.8 * tokenized_ds_len):int(0.9 * tokenized_ds_len)]
+    test_seqs = tokenized[int(0.9 * tokenized_ds_len):]
 
-train_lines = tokenized[:int(0.8 * tokenized_ds_len)]
-val_lines = tokenized[int(0.8 * tokenized_ds_len):int(0.9 * tokenized_ds_len)]
-test_lines = tokenized[int(0.9 * tokenized_ds_len):]
-
-print(f"📊 Train: {len(train_lines)}, Val: {len(val_lines)}, Test: {len(test_lines)}")
-
-train_dataset = TweeterDataset(train_lines)
-val_dataset = TweeterDataset(val_lines)
-test_dataset = TweeterDataset(test_lines)
-
-train_dataloader = DataLoader(
-    train_dataset,
-    batch_size=320,
-    shuffle=True,
-    collate_fn=collate_fn,
-)
-
-val_dataloader = DataLoader(
-    val_dataset,
-    batch_size=128,
-    collate_fn=collate_fn,
-)
-
-test_dataloader = DataLoader(
-    test_dataset,
-    batch_size=256,
-    collate_fn=collate_fn,
-)
+    print(f"📊 Train: {len(train_seqs)}, Val: {len(val_seqs)}, Test: {len(test_seqs)}")
+    return train_seqs, val_seqs, test_seqs

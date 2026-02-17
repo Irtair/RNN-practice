@@ -3,23 +3,27 @@ import torch
 from torch.optim import Adam
 from torch.nn import CrossEntropyLoss
 from tqdm import tqdm
-from data_utils import tokenizer, train_dataloader, val_dataloader, test_dataloader
-from lstm_model import AutoCompleteLSTM
+from src.lstm_model import AutoCompleteLSTM
 import evaluate
+import yaml
+
+path = "./configs/config.yaml"
+with open(path, "r") as f:
+    config = yaml.safe_load(f)
 
 
 # Объявление основных переменных, используемых при обучении
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 #Путь для сохранения модели
-save_dir = "models"
+save_dir = config["data"]["model_save_dir"]
 os.makedirs(save_dir, exist_ok=True)
-model_path = os.path.join(save_dir, "best_model.pt")
+model_path = os.path.join(save_dir, config["model"]["best_model_file"])
 
 #Создание модели
 model = AutoCompleteLSTM().to(device)
 
-optimizer = Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
+optimizer = Adam(model.parameters(), lr=config["training"]["learning_rate"], weight_decay=1e-5)
 criterion = CrossEntropyLoss(ignore_index=-100)
 
 #Проверка на наличие сохраненной модели
@@ -30,14 +34,14 @@ if os.path.exists(model_path):
     
 #Переменные для Early Stopping
 best_val_loss = float("inf")
-patience = 3
+patience = config["training"]["early_stopping"]["patience"]
 patience_counter = 0
 
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
 
 rouge = evaluate.load("rouge")
 
-def evaluate_rouge_on_val():
+def evaluate_rouge_on_val(test_dataloader, tokenizer):
     model.eval()
     
     predictions = []
@@ -88,11 +92,7 @@ def evaluate_rouge_on_val():
     scores = rouge.compute(predictions=predictions, references=references)
     print(f"ROUGE-1: {scores['rouge1']:.4f}")
 
-#Цикл обучения и валидации по эпохам
-num_epochs = 30
-for epoch in range(num_epochs):
-    print(f"Эпоха {epoch+1}/{num_epochs}")
-
+def training(train_dataloader):
     model.train()
     total_loss = 0
 
@@ -119,6 +119,7 @@ for epoch in range(num_epochs):
     print(f"Train Loss: {avg_training_loss:.4f}")
 
 
+def validation(val_dataloader):
     model.eval()
     val_loss = 0
 
@@ -140,6 +141,7 @@ for epoch in range(num_epochs):
     scheduler.step(avg_validation_loss)
     print(f"Val Loss: {avg_validation_loss:.4f}")
 
+    should_stop = False
     if avg_validation_loss < best_val_loss:
         best_val_loss = avg_validation_loss
         patience_counter = 0
@@ -148,18 +150,20 @@ for epoch in range(num_epochs):
             "model": model.state_dict(),
             "optimizer": optimizer.state_dict()
         }, model_path)
-        print("✅ Model saved!")
+        print("✅ Модель сохранена!")
     else:
         patience_counter += 1
         print(f"⚠️Валидационная ошибка не уменьшилась ({patience_counter}/{patience})")
         if patience_counter >= patience:
             print("🛑 Early stopping")
-            break
+            should_stop = True
     
-    if (epoch + 1) % 5 == 0 or epoch == 0:
-        evaluate_rouge_on_val()
+    return should_stop
 
-    print("\n🔮 Генерации:")
+
+def generate(tokenizer):
+    print("\nГенерации:")
+
     for prompt in ["i love", "thinking about", "where is"]:
         enc = tokenizer.encode(prompt)
         input_ids = enc.ids

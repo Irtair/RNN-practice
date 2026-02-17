@@ -1,11 +1,23 @@
 import torch.nn as nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from tokenizers import Tokenizer
+import yaml
 
-tokenizer = Tokenizer.from_file("wordlevel.json")
+path = "./configs/config.yaml"
+with open(path, "r") as f:
+    config = yaml.safe_load(f)
+
+tokenizer = Tokenizer.from_file(config["data"]["tokenizer_file_name"])
 
 class AutoCompleteLSTM(nn.Module):
-    def __init__(self, vocab_size=tokenizer.get_vocab_size(), embedding_dim=256, hidden_dim=256, num_layers=2, dropout=0.3):
+    def __init__(
+            self, 
+            vocab_size=tokenizer.get_vocab_size(), 
+            embedding_dim=config["model"]["embedding_dim"], 
+            hidden_dim=config["model"]["hidden_dim"], 
+            num_layers=config["model"]["num_layers"], 
+            dropout=config["model"]["dropout"]
+        ):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=tokenizer.token_to_id("<pad>"))
         self.dropout_emb = nn.Dropout(dropout)

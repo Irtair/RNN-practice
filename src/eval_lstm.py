@@ -9,10 +9,10 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 save_dir = "models"
 model_path = os.path.join(save_dir, "best_model.pt")
 model = AutoCompleteLSTM().to(device)
+
 if os.path.exists(model_path):
     checkpoint = torch.load(model_path, map_location=device)
     model.load_state_dict(checkpoint["model"])
-    # optimizer.load_state_dict(checkpoint["optimizer"])
 
 model.eval()
 input = input("Enter prompt: ")
