@@ -51,7 +51,7 @@ def rouge_calc_for_transformer(generator):
 
         generated = []
 
-        for prompt, ref in tqdm(zip(prompts, references), total=len(prompts)):
+        for prompt, ref in tqdm(zip(prompts, references), total=len(prompts), desc="ROUGE"):
             ref_len = max(1, len(ref.split()))
 
             output = generator(

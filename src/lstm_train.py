@@ -23,7 +23,7 @@ model_path = os.path.join(save_dir, config["model"]["best_model_file"])
 #Создание модели
 model = AutoCompleteLSTM().to(device)
 
-optimizer = Adam(model.parameters(), lr=config["training"]["learning_rate"], weight_decay=1e-5)
+optimizer = Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
 criterion = CrossEntropyLoss(ignore_index=-100)
 
 #Проверка на наличие сохраненной модели
