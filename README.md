@@ -1,5 +1,5 @@
 [README.md](https://github.com/user-attachments/files/25368769/README.md)
-# 🧠 Генерация текста твитов: LSTM vs Transformer
+# 🧠 Генерация текста на основе твитов: LSTM vs Transformer
 
 Проект по обучению пословной LSTM-модели для автодополнения текста на данных твитов, с последующим сравнением с предобученным трансформером `distilgpt2` через HuggingFace pipeline.
 
@@ -30,12 +30,6 @@
 ## 🚀 Быстрый старт
 
 ### 1. Клонировать репозиторий
-
-```bash
-git clone https://github.com/your-username/your-repo.git
-cd your-repo
-```
-
 ### 2. Создать виртуальное окружение и установить зависимости
 
 ```bash
@@ -87,7 +81,7 @@ pip install -r requirements.txt
 
 | Модель | ROUGE-1 |
 |--------|---------|
-| LSTM (обучена с нуля) | *твой результат* |
+| LSTM (обучена с нуля) | 0.0722 |
 | distilgpt2 (предобученная, HuggingFace) | 0.0497 |
 
 ---
@@ -98,7 +92,9 @@ pip install -r requirements.txt
 ```python
 from src.eval_lstm import lsmt_generate
 lsmt_generate("still dont know")
-# → still dont know what to do
+# → still dont know when things take ages
+lsmt_generate("still dont know")
+# → i want you to be back
 ```
 
 **Transformer:**
@@ -108,6 +104,12 @@ from src.eval_transformer_pipeline import transformer_generate
 
 generator = pipeline("text-generation", model="distilgpt2")
 transformer_generate(generator, ["Deep Learning is", "What is going on with"])
+
+# → I am about to be released by the company.”  The first episode of the series is called �
+# → What is going on with this, and what do you think this is going to be?
+# → Don't you mind if I'm on the phone with you?     If you're ready, ask my
+# → Let us deal with the question: Who exactly does the money come from?    So, even if we
+# → Deep Learning is a tool for learning new concepts. These resources are available as a single sheet of data. Each sheet
 ```
 
 ---
