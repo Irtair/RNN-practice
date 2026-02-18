@@ -4,190 +4,216 @@ from torch.optim import Adam
 from torch.nn import CrossEntropyLoss
 from tqdm import tqdm
 from src.lstm_model import AutoCompleteLSTM
+from tokenizers import Tokenizer
 import evaluate
-import yaml
-
-path = "./configs/config.yaml"
-with open(path, "r") as f:
-    config = yaml.safe_load(f)
 
 
-# Объявление основных переменных, используемых при обучении
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+class Trainer:
+    def __init__(self, config):
+        self.config = config
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-#Путь для сохранения модели
-save_dir = config["data"]["model_save_dir"]
-os.makedirs(save_dir, exist_ok=True)
-model_path = os.path.join(save_dir, config["model"]["best_model_file"])
+        # Пути
+        self.save_dir = config["data"]["model_save_dir"]
+        os.makedirs(self.save_dir, exist_ok=True)
+        self.model_path = os.path.join(self.save_dir, config["model"]["best_model_file"])
 
-#Создание модели
-model = AutoCompleteLSTM().to(device)
+        self.tokenizer = Tokenizer.from_file(config["data"]["tokenizer_file_name"])
 
-optimizer = Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
-criterion = CrossEntropyLoss(ignore_index=-100)
+        # Модель
+        self.model = AutoCompleteLSTM().to(self.device)
 
-#Проверка на наличие сохраненной модели
-if os.path.exists(model_path):
-    checkpoint = torch.load(model_path, map_location=device)
-    model.load_state_dict(checkpoint["model"])
-    optimizer.load_state_dict(checkpoint["optimizer"])
-    
-#Переменные для Early Stopping
-best_val_loss = float("inf")
-patience = config["training"]["early_stopping"]["patience"]
-patience_counter = 0
+        self.optimizer = Adam(self.model.parameters(), lr=1e-3, weight_decay=1e-5)
+        self.criterion = CrossEntropyLoss(ignore_index=-100)
 
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode="min", factor=0.5, patience=2)
 
-rouge = evaluate.load("rouge")
+        self.rouge = evaluate.load("rouge")
 
-def evaluate_rouge_on_val(test_dataloader, tokenizer):
-    model.eval()
-    
-    predictions = []
-    references = []
-    
-    print("\n📊 Вычисление ROUGE...")
-    
-    with torch.no_grad():
-        num_samples = 0
-        max_samples = 100
+        # Early stopping
+        self.best_val_loss = float("inf")
+        self.patience_counter = 0
+        self.patience = config["training"]["early_stopping"]["patience"]
 
-        for batch in tqdm(test_dataloader, desc="ROUGE evaluation", leave=False):
-            lines = batch['lines'].to(device)
-            lengths = batch['lengths']
-            
-            for i in range(lines.size(0)):
-                seq_len = lengths[i].item()
-                full_seq = lines[i, :seq_len]
+        # Загрузка чекпоинта
+        if os.path.exists(self.model_path):
+            checkpoint = torch.load(self.model_path, map_location=self.device)
+            self.model.load_state_dict(checkpoint["model"])
+            self.optimizer.load_state_dict(checkpoint["optimizer"])
+            print("Модель загружена из чекпоинта")
 
-                split_idx = int(0.75 * seq_len)
+    def train_epoch(self, train_dataloader):
+        self.model.train()
+        total_loss = 0
 
-                prompt = full_seq[:split_idx].unsqueeze(0)
-                target = full_seq[split_idx:]
-
-                logits, hidden = model(prompt)
-
-                generated_tokens = []
-
-                for _ in range(len(target)):
-                    next_token_logits = logits[:, -1, :]
-                    next_token = torch.argmax(next_token_logits, dim=-1)
-
-                    generated_tokens.append(next_token.item())
-
-                    logits, hidden = model(next_token.unsqueeze(0), hidden=hidden)
-
-                pred_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
-                ref_text = tokenizer.decode(target.tolist(), skip_special_tokens=True)
-
-                predictions.append(pred_text)
-                references.append(ref_text)
-
-                sample_count += 1
-
-            if num_samples >= max_samples:
-                break
-    
-    scores = rouge.compute(predictions=predictions, references=references)
-    print(f"ROUGE-1: {scores['rouge1']:.4f}")
-
-def training(train_dataloader):
-    model.train()
-    total_loss = 0
-
-    for batch in tqdm(train_dataloader, desc="Training"):
-        lines = batch["lines"].to(device)
-        labels = batch["labels"].to(device)
-        lengths = batch["lengths"]
-
-        optimizer.zero_grad()
-        logits, _ = model(lines, lengths=lengths)
-        loss = criterion(
-            logits.reshape(-1, logits.size(-1)),
-            labels.reshape(-1)
-        )
-
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        
-        optimizer.step()
-
-        total_loss += loss.item()
-   
-    avg_training_loss = total_loss / len(train_dataloader)
-    print(f"Train Loss: {avg_training_loss:.4f}")
-
-
-def validation(val_dataloader):
-    model.eval()
-    val_loss = 0
-
-    with torch.no_grad():
-        for batch in tqdm(val_dataloader, desc='Validation', leave=False):
-            lines = batch['lines'].to(device)
-            labels = batch['labels'].to(device)
+        for batch in tqdm(train_dataloader, desc="Training"):
+            lines = batch["lines"].to(self.device)
+            labels = batch["labels"].to(self.device)
             lengths = batch["lengths"]
 
-            logits, _ = model(lines, lengths=lengths)
+            self.optimizer.zero_grad()
 
-            loss = criterion(
+            logits, _ = self.model(lines, lengths=lengths)
+
+            loss = self.criterion(
                 logits.reshape(-1, logits.size(-1)),
                 labels.reshape(-1)
             )
-            val_loss += loss.item()
 
-    avg_validation_loss = val_loss / len(val_dataloader)
-    scheduler.step(avg_validation_loss)
-    print(f"Val Loss: {avg_validation_loss:.4f}")
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+            self.optimizer.step()
 
-    should_stop = False
-    if avg_validation_loss < best_val_loss:
-        best_val_loss = avg_validation_loss
-        patience_counter = 0
+            total_loss += loss.item()
 
-        torch.save({
-            "model": model.state_dict(),
-            "optimizer": optimizer.state_dict()
-        }, model_path)
-        print("✅ Модель сохранена!")
-    else:
-        patience_counter += 1
-        print(f"⚠️Валидационная ошибка не уменьшилась ({patience_counter}/{patience})")
-        if patience_counter >= patience:
-            print("🛑 Early stopping")
-            should_stop = True
-    
-    return should_stop
+        avg_loss = total_loss / len(train_dataloader)
+        print(f"Train Loss: {avg_loss:.4f}")
 
-
-def generate(tokenizer):
-    print("\nГенерации:")
-
-    for prompt in ["i love", "thinking about", "where is"]:
-        enc = tokenizer.encode(prompt)
-        input_ids = enc.ids
-        generated = torch.tensor(input_ids, dtype=torch.long).unsqueeze(0).to(device)
-
-        hidden = None
+    def validate(self, val_dataloader):
+        self.model.eval()
+        total_loss = 0
 
         with torch.no_grad():
-            # прогоняем весь prompt один раз
-            logits, hidden = model(generated)
+            for batch in tqdm(val_dataloader, desc="Validation", leave=False):
+                lines = batch["lines"].to(self.device)
+                labels = batch["labels"].to(self.device)
+                lengths = batch["lengths"]
 
-            for _ in range(20):
-                next_token_logits = logits[:, -1, :]
-                probs = torch.softmax(next_token_logits, dim=-1)
-                next_token = torch.multinomial(probs, 1)
+                logits, _ = self.model(lines, lengths=lengths)
 
-                eos_id = tokenizer.token_to_id("<eos>")
-                if next_token.item() == eos_id:
+                loss = self.criterion(
+                    logits.reshape(-1, logits.size(-1)),
+                    labels.reshape(-1)
+                )
+
+                total_loss += loss.item()
+
+        avg_loss = total_loss / len(val_dataloader)
+        self.scheduler.step(avg_loss)
+
+        print(f"Val Loss: {avg_loss:.4f}")
+
+        if avg_loss < self.best_val_loss:
+            self.best_val_loss = avg_loss
+            self.patience_counter = 0
+
+            torch.save({
+                "model": self.model.state_dict(),
+                "optimizer": self.optimizer.state_dict()
+            }, self.model_path)
+
+            print("Модель сохранена")
+            return False
+
+        else:
+            self.patience_counter += 1
+            print(f"Val loss не уменьшилась ({self.patience_counter}/{self.patience})")
+
+            if self.patience_counter >= self.patience:
+                print("Early stopping")
+                return True
+
+            return False
+
+    def evaluate_rouge(self, test_dataloader, max_samples=100):
+        self.model.eval()
+
+        predictions = []
+        references = []
+        num_samples = 0
+
+        with torch.no_grad():
+            for batch in tqdm(test_dataloader, desc="ROUGE", leave=False):
+                lines = batch["lines"].to(self.device)
+                lengths = batch["lengths"]
+
+                for i in range(lines.size(0)):
+                    if num_samples >= max_samples:
+                        break
+
+                    seq_len = lengths[i].item()
+                    full_seq = lines[i, :seq_len]
+
+                    split_idx = int(0.75 * seq_len)
+
+                    prompt = full_seq[:split_idx].unsqueeze(0)
+                    target = full_seq[split_idx:]
+
+                    logits, hidden = self.model(prompt)
+
+                    generated_tokens = []
+
+                    for _ in range(len(target)):
+                        next_token = torch.argmax(
+                            logits[:, -1, :],
+                            dim=-1
+                        )
+
+                        generated_tokens.append(next_token.item())
+
+                        logits, hidden = self.model(
+                            next_token.unsqueeze(0),
+                            hidden=hidden
+                        )
+
+                    pred_text = self.tokenizer.decode(
+                        generated_tokens,
+                        skip_special_tokens=True
+                    )
+
+                    ref_text = self.tokenizer.decode(
+                        target.tolist(),
+                        skip_special_tokens=True
+                    )
+
+                    predictions.append(pred_text)
+                    references.append(ref_text)
+
+                    num_samples += 1
+
+                if num_samples >= max_samples:
                     break
 
-                generated = torch.cat([generated, next_token], dim=1)
+        scores = self.rouge.compute(
+            predictions=predictions,
+            references=references
+        )
 
-                # теперь подаём только последний токен
-                logits, hidden = model(next_token, hidden=hidden)
+        print(f"ROUGE-1: {scores['rouge1']:.4f}")
 
-        generated = tokenizer.decode(generated[0].tolist())
-        print(f"'{prompt}' → {generated}")
+    def generate(self, max_len=20):
+        self.model.eval()
+
+        prompts = ["i love", "thinking about", "where is"]
+
+        for prompt in prompts:
+            enc = self.tokenizer.encode(prompt)
+            input_ids = enc.ids
+
+            generated = torch.tensor(
+                input_ids,
+                dtype=torch.long
+            ).unsqueeze(0).to(self.device)
+
+            hidden = None
+
+            with torch.no_grad():
+                logits, hidden = self.model(generated)
+
+                for _ in range(max_len):
+                    probs = torch.softmax(logits[:, -1, :], dim=-1)
+                    next_token = torch.multinomial(probs, 1)
+
+                    eos_id = self.tokenizer.token_to_id("<eos>")
+                    if next_token.item() == eos_id:
+                        break
+
+                    generated = torch.cat([generated, next_token], dim=1)
+
+                    logits, hidden = self.model(
+                        next_token,
+                        hidden=hidden
+                    )
+
+            text = self.tokenizer.decode(generated[0].tolist())
+            print(f"{prompt} → {text}")

@@ -43,4 +43,4 @@ def lsmt_generate(prompt):
 
     generated = tokenizer.decode(generated[0].tolist())
 
-    print(f"'{input}' → {generated}")
+    print(f"{prompt} → {generated}")
