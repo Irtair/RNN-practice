@@ -105,11 +105,8 @@ from src.eval_transformer_pipeline import transformer_generate
 generator = pipeline("text-generation", model="distilgpt2")
 transformer_generate(generator, ["Deep Learning is", "What is going on with"])
 
-# → I am about to be released by the company.”  The first episode of the series is called �
-# → What is going on with this, and what do you think this is going to be?
-# → Don't you mind if I'm on the phone with you?     If you're ready, ask my
-# → Let us deal with the question: Who exactly does the money come from?    So, even if we
 # → Deep Learning is a tool for learning new concepts. These resources are available as a single sheet of data. Each sheet
+# → What is going on with this, and what do you think this is going to be?
 ```
 
 ---
